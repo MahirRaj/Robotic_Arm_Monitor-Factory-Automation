@@ -1,0 +1,61 @@
+import cv2
+import numpy as np
+import mss
+from ultralytics import YOLO
+import time
+from flask import Flask, Response
+
+# --- CONFIGURATION ---
+MODEL_PATH = 'final_v2.pt'   # Ensure this matches your model filename
+CONFIDENCE = 0.15         # Keep this low to catch small arms
+HOST_IP = '0.0.0.0'
+PORT = 5000
+
+app = Flask(__name__)
+print("Loading model...")
+model = YOLO(MODEL_PATH)
+
+def generate_frames():
+    with mss.mss() as sct:
+        monitor = sct.monitors[1]
+        
+        while True:
+            # 1. Capture Screen
+            screenshot = sct.grab(monitor)
+            frame = np.array(screenshot)
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+            
+            # 2. Run Detection (Aggressive Mode)
+            results = model.predict(frame, conf=CONFIDENCE, imgsz=1280, verbose=False)
+            annotated_frame = results[0].plot()
+            
+            # --- NEW CODE: COUNTING ---
+            # Get the number of boxes detected
+            arm_count = len(results[0].boxes)
+            
+            # 3. Draw Text on Screen
+            # Draw "LIVE FEED" (Red)
+            cv2.putText(annotated_frame, "LIVE FEED", (30, 50), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            
+            # Draw "Count" (Green, slightly lower down)
+            cv2.putText(annotated_frame, f"Arms Active: {arm_count}", (30, 100), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)
+            
+            # 4. Stream it
+            ret, buffer = cv2.imencode('.jpg', annotated_frame)
+            frame_bytes = buffer.tobytes()
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
+@app.route('/')
+def index():
+    return "<html><head><title>Robotic Arm Monitor</title></head><body><h1>Factory Monitor</h1><img src='/video_feed' width='100%'></body></html>"
+
+@app.route('/video_feed')
+def video_feed():
+    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+if __name__ == '__main__':
+    print(f"🚀 Streaming Started! Open http://<YOUR_IP>:{PORT} on your phone.")
+    app.run(host=HOST_IP, port=PORT, debug=False)
